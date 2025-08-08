@@ -1,0 +1,195 @@
+# kubernetes.yaml - Kubernetes deployment configuration
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trading-api
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trading-api-config
+  namespace: trading-api
+data:
+  DATABASE_PATH: "/app/data/trading_data.db"
+  API_PORT: "8079"
+  EXCHANGE: "binance"
+  FLASK_ENV: "production"
+  LOG_LEVEL: "INFO"
+  ENABLE_METRICS: "true"
+  UPDATE_INTERVAL_HOURS: "48"
+  TIMEZONE: "UTC"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trading-api-secrets
+  namespace: trading-api
+type: Opaque
+data:
+  SECRET_KEY: <base64-encoded-secret-key>
+  API_KEY: <base64-encoded-api-key>
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trading-api-data
+  namespace: trading-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trading-api
+  namespace: trading-api
+  labels:
+    app: trading-api
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: trading-api
+  template:
+    metadata:
+      labels:
+        app: trading-api
+    spec:
+      containers:
+      - name: trading-api
+        image: trading-leverage-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8079
+          name: http
+        env:
+        - name: DATABASE_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: trading-api-config
+              key: DATABASE_PATH
+        - name: API_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: trading-api-config
+              key: API_PORT
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: trading-api-secrets
+              key: SECRET_KEY
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: trading-api-secrets
+              key: API_KEY
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+        - name: logs-volume
+          mountPath: /app/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8079
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8079
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: trading-api-data
+      - name: logs-volume
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trading-api-service
+  namespace: trading-api
+spec:
+  selector:
+    app: trading-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8079
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trading-api-ingress
+  namespace: trading-api
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/rate-limit: "10"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - api.yourdomain.com
+    secretName: trading-api-tls
+  rules:
+  - host: api.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: trading-api-service
+            port:
+              number: 80
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trading-api-pdb
+  namespace: trading-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: trading-api
+
+---
