@@ -255,7 +255,7 @@ If port 8079 is already in use:
 ```bash
 # Change port in docker-compose.yml
 ports:
-  - "8080:8079"  # Use port 8080 instead
+  - "8079:8079"  # Use port 8079 instead
 ```
 
 ## 🔒 Security Notes
